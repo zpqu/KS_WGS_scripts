@@ -1,10 +1,10 @@
 # Scripts for the de novo genome asembly of Sophora Flavescens
 
 ## Introduction
-This archive includes scripts used to de novo genome assembly of Sophora Flavescens. The sequencing data used to do genome assembly including following datasets:
+This archive includes scripts used to do de novo genome assembly of Sophora Flavescens (苦参, Ku-shen). The sequencing data used to do genome assembly including following datasets:
 
 - Nanopore WGS sequencing: ~100x
-- Illulimna WGS sequencing: ~100x
+- Illumina WGS sequencing: ~100x
 - HiC WGS sequencing: ~100x
 - Transcriptome sequencing: from leaf, stem and root
 
@@ -50,13 +50,13 @@ The folder structure of this archive is as follows:
 33 directories
 ```
 
-There are four level 1 folders, including scritps used to do four different parts of the analysis in the project.
+There are four top level folders, including scripts used to perform four different parts of the analysis in the project.
 
 ### 01_Genome survey
 The folder `01_genome_survey` includes scripts used to do genome survey analysis using illumina WGS sequencing dataset.
 
 ### 02_genome_assembly
-This folder includes scritps to do de novo genome assembly. To obtain a high-quality reference genome, we used 17 different assembly strategies (see following table). The initial strategy was to use the CANU-only (v2.0) pipeline. After the error-correction of Nanopore reads using the CANU ``correct'' module, we used the CANU ``trim'' module to remove low quality regions in error-corrected reads. The genome was then assembled using the CANU ``assemble'' module with the following parameters: genomeSize=2.1g corMinCoverage=2 corOutCoverage=200 ``batOptions=-dg 3 -db 3 -dr 1 -ca 500 -cp 50'' correctedErrorRate=0.12 corMhapSensitivity=normal ovlMerThreshold=500 -nanopore. In addition, we also tried four other assemblers, including Raven (v1.1.10), SMARTdenovo (v1.0), wtdbg2 (v1.1) and Flye (v2.7.1) on four different input datasets respectively. The first input dataset includes all nanopore raw reads (named as ``raw\_all''). The second input dataset is a subset of the first dataset, including only raw reads longer than the N50 of all raw reads (named as ``raw\_N50''). The third input dataset includes error-corrected Nanopore reads using CANU (named as ``canu\_ec''). And the fourth input dataset includes error-corrected reads longer than the N50 of all error-corrected reads using FMLRC (v1.0.0) (``fmlrc\_N50''). 
+This folder includes scritps to do de novo genome assembly. To obtain a high-quality reference genome, we used 17 different assembly strategies (see following table). The initial strategy was to use the CANU-only (v2.0) pipeline. After the error-correction of Nanopore reads using the CANU `correct` module, we used the CANU `trim` module to remove low quality regions in error-corrected reads. The genome was then assembled using the CANU `assemble` module. In addition, we also tried four other assemblers, including Raven (v1.1.10), SMARTdenovo (v1.0), wtdbg2 (v1.1) and Flye (v2.7.1) on four different input datasets respectively. The first input dataset includes all nanopore raw reads (named as `raw_all`). The second input dataset is a subset of the first dataset, including only raw reads longer than the N50 of all raw reads (named as `raw_N50`). The third input dataset includes error-corrected Nanopore reads using CANU (named as `canu_ec`). And the fourth input dataset includes error-corrected reads longer than the N50 of all error-corrected reads using FMLRC (v1.0.0) (`fmlrc_N50`). 
 
 | Assembler   | Input     | Number_of_reads | N50_of_reads | Depth  |
 |-------------|-----------|-----------------|--------------|--------|
@@ -78,13 +78,13 @@ This folder includes scritps to do de novo genome assembly. To obtain a high-qua
 | flye        | canu_ec   | 1,904,306,272   | 20           | 94.2x  |
 | canu        | canu_ec   | 3,636,323,899   | 20           | 94.2x  |
 
-Contigs were further scaffolded using HiC WGS sequencing dataset. Scritps used to do scaffolding are stored in subfolder `t1_2_HiC_scaffolding`. 
+Haplotigs were then purged from contigs (subfolder `t1_1_purge_haplotigs`), and then contigs with haplotigs removed were further scaffolded using HiC WGS sequencing dataset. Scripts used to do scaffolding are stored in subfolder `t1_2_HiC_scaffolding`. 
 
 ### 03_genome_annotation
 This folder includes scripts to do gene annotation (subfolder `01_gene_annotation`), repeat annotation (subfolder `02_repeat_annotation`) and transcriptome analysis (subfolder `03_transcriptome`).
 
 ### 04_phylogenomics
-This folder includes scritps to do phylogenomics for the assembled genome, including:
+This folder includes scripts to do phylogenomics for the assembled genome, including:
 
 - 01_orthofinder: Orthologs identification
 - 02_gene_expansion: Gene expansion and contraction analysis
