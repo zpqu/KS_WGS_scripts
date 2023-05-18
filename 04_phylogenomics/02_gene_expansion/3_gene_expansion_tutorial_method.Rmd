@@ -1,0 +1,222 @@
+---
+title: "3 Gene expansion analysis according to tutorial method"
+author: "Zhipeng Qu"
+date: "17/01/2022"
+output:
+    html_document:
+        toc: true
+        toc_depth: 3
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(
+    message = FALSE, 
+    comment = '', 
+    fig.width = 6, 
+    fig.height = 6
+)
+```
+
+Summary: this gene expansion analysis is based on the gitbub 2020 version of CAFE tutorial (https://github.com/hahnlab/CAFE5/blob/master/docs/tutorial/tutorial.md). 
+
+## 1 All vs all blastp
+
+Run an all-vs-all blastp for proteins from all species. This step was carried out in Phoenix.
+
+```
+#!/bin/bash
+echo -ne "The program starts at: "
+date
+
+wkDIR="/hpcfs/KS_WGS_20200626/phylogenomics_analysis_20220203/data/primary_proteins/"
+
+export TMPDIR=${wkDIR}
+
+##create database index
+cd ${wkDIR}
+
+if [ -f all_species.primary_proteins.fa.phr ]; then
+    echo "Formatted database exists ... "
+else
+    makeblastdb -dbtype prot -in all_species.primary_proteins.fa
+fi
+
+##step 2, run blastp
+
+/usr/bin/time --verbose blastp -query all_species.primary_proteins.fa \
+    -db all_species.primary_proteins.fa \
+    -num_threads 64 \
+    -seg yes \
+    -outfmt 7 \
+    -out all_vs_all.blastp.txt
+ 
+echo -ne "The program ends at: "
+date
+```
+
+The slurm script for this job is:
+
+```
+#!/bin/bash
+#SBATCH -p batch
+#SBATCH -N 1
+#SBATCH -n 32
+#SBATCH --time=24:00:00
+#SBATCH --mem=64GB
+#SBATCH --ntasks-per-core=2
+
+#SBATCH --mail-type=END
+#SBATCH --mail-user=zhipeng.qu@adelaide.edu.au
+#SBATCH -o run_blastp.all_vs_all.slurm-%j.out
+
+
+./run_blastp.all_vs_all.sh >run_blastp.all_vs_all.20220119.log 2>&1
+
+sacct -j $SLURM_JOBID --format="JobID,JobName,Partition,ReqNodes,ReqCPUS,ReqMem,Timelimit,ExitCode,Cluster,Account,AllocCPUS,AllocNodes,CPUTime,MaxRSS,Elapsed,MaxDiskRead,MaxDiskWrite,Submit,Start"
+
+```
+
+With 32 cores, the all-vs-all blastp for all sequences couldn't be finished in 3 days (72 hrs), therefore, all sequences were split into two files, and two jobs were submitted simutaneously. 
+
+```
+# split big fasta files into two files, each file has 600000 sequences
+awk 'BEGIN {n_seq=0;} /^>/ {if(n_seq%600000==0){file=sprintf("all_species.primary_proteins.p%d.fa", n_seq);} print >> file; n_seq++; next;} {print >> file;}' < all_species.primary_proteins.fa
+
+# after the all-vs-all blastp finished, merge two output files and create abc file
+cat all_vs_all.blastp.p0.txt all_vs_all.blastp.p1.txt >all_vs_all.blastp.merged.txt
+```
+
+## 3 Clustering sequences with mcl
+
+[27/01/2022]
+
+Use mcl to create a network and a dictionary file (.mci and .tab) and perform the clustering
+
+This step was carried out in freebie.
+
+```
+## in total, took less than 3 hours
+wkDIR="/home/Genomics/Lab_projects/KS_WGS_29112019/results/nanopore/phylogenomics_analysis_20220203"
+dataDIR="${wkDIR}/data/primary_proteins"
+outDIR="${wkDIR}/results/3_gene_expansion_tutorial_method"
+
+if [ -f ${outDIR} ]; then
+    echo "${outDIR} exists!"
+else
+    mkdir -p ${outDIR}
+fi
+
+cd ${outDIR}
+
+# format blastp output to abc file for MCL
+grep -v "#" all_vs_all.blastp.merged.txt | cut -f 1,2,11 >all_vs_all.blastp.merged.abc
+
+mcxload -abc all_vs_all.blastp.merged.abc --stream-mirror --stream-neg-log10 -stream-tf 'ceil(200)' all_vs_all.blastp.merged.mci -write-tab all_vs_all.blastp.merged.tab
+
+mcl all_vs_all.blastp.merged.mci -I 3
+
+mcxdump -icl out.all_vs_all.blastp.merged.mci.I30 -tabr all_vs_all.blastp.merged.tab -o dump.all_vs_all.blastp.merged.mci.I30
+```
+
+[28/01/2022]
+
+The "dump.all_vs_all.blastp.merged.mci.I30" file needs to be parsed and filtered to be used by CAFE. First, dump output has each raw as one cluster/orthogroups with proteins from species in this cluster/orthogroup included. The number of proteins from each species in each cluster/orthogroups needs to be summarised. Second, cluster/orthogroups need to be filtered based on two criteria: 1) Gene families that have large gene copy number variance can cause parameter estimates to be non-informative. Therefore, gene families (orthogroups) in which one or more species have >= 100 gene copies need to be removed. 2) Gene families with gene copies in only one species will also be filtered.
+
+The summarisation and filteration steps were done using a self-written python script "mcl2cafe.py".
+
+```
+wkDIR="/home/Genomics/Lab_projects/KS_WGS_29112019/results/nanopore/phylogenomics_analysis_20220203"
+dataDIR="${wkDIR}/data/primary_proteins"
+outDIR="${wkDIR}/results/3_gene_expansion_tutorial_method"
+scriptDIR="${wkDIR}/scripts"
+
+cd $outDIR
+ls ${dataDIR}/*.faa > fa_list
+python ${scriptDIR}/mcl2cafe.py \
+    fa_list \
+    dump.all_vs_all.blastp.merged.mci.I30 \
+    all_vs_all.blastp.merged.mcl_count.cafe_raw.tsv \
+    all_vs_all.blastp.merged.mcl_count.cafe_large.tsv \
+    mll_vs_all.blastp.merged.mcl_count.cafe_small.tsv
+```
+
+The output are three files: "cafe_raw.tsv" includes all gene families; "cafe_large.tsv" inlcudes all filtered gene families; "cafe_small" includes all left gene families, this file will be used to estimate parameters in CAFE.
+
+## 3 Estimating a species tree
+
+We will use the species tree which was generated from orthofinder.
+
+## 4 Run CAFE
+
+[03/02/2022]
+[09/02/2022]
+
+[Important] Please note, CAFE5 (v5.0, 2021 May) has issue to estimate lamda for my dataset. CAFE5 (v5.0b2, 2020 Jan) works fine, but python scripts are not compatible with this. Therefore, CAFE4 (v4.2.1) was used in this analysis. The analysis was based on the 2016 tutorial. 
+
+1. Estimating the birth-death parameter lamda
+
+The main goal of CAFE is to estimate one or more birth-death (lamda) parameters for the provied tree and gene family counts. The lamda parameter describes the probability that any gene will be gained or lost.
+
+In this initial analysis, we assume all species have the same lambda values. A pseudo tree was manually created based on the ultrametric tree as the input of lambda command (replace all nodes with 1). These cafe commands were saved in a cafe_run1.sh
+
+```
+wkDIR="/home/Genomics/Lab_projects/KS_WGS_29112019/results/nanopore/phylogenomics_analysis_20220203"
+outDIR="${wkDIR}/results/3_gene_expansion_tutorial_method"
+scriptDIR="${wkDIR}/scripts"
+binDIR="$HOME/Apps/CAFE/release"
+
+if [ -f ${outDIR} ]; then
+    echo -ne "${outDIR} exists!"
+else
+    mkdir -p ${outDIR}
+fi
+
+cd ${outDIR}
+mkdir cafe_reports
+
+## Step 1, estimate lambda using small gene families
+/usr/bin/time --verbose ${binDIR}/cafe tutorial_run1.cafe \
+    >tutorial_run1.log
+
+# summarise the cafe output
+python ${binDIR}/../cafe_tutorial/python_scripts/cafetutorial_report_analysis.py \
+    -i cafe_reports/report_run1.cafe \
+    -o cafe_reports/summary_run1 \
+    > tutorial_run1.summary.log
+
+# plot tree with gene expansion/contraction info added (requires biopython), in this
+# script, '-t' is the ultrametric tree from orthoFinder, '-d' is the node tree generated
+# from the log file of last step, '-o' tree with rapid gene expansion/contraction gene
+# families numbers added, '-y' only add rapid gene families.
+python3 ${binDIR}/../cafe_tutorial/python_scripts/cafetutorial_draw_tree.py \
+    -i cafe_reports/summary_run1_node.txt \
+    -t '((Macu:126.846,(Osat:41.0142,Zmay:41.0142):85.8318):33.154,(Nnuc:131.245,(Slyc:114.445,(((Mdom:91.5196,(Csat:84.2473,Atha:84.2473):7.27227):5.91307,(Ccan:65.1305,((Mpud:43.7174,(Stor:34.136,Cfas:34.136):9.58146):17.3229,((Sfla:33.1392,(Lalb:10.1245,Lang:10.1245):23.0147):10.7475,((Dodo:29.7728,Ahyp:29.7728):11.9215,((Ccaj:22.5111,(Gmax:20.1352,(Vrad:9.80071,Pvul:9.80071):10.3345):2.37588):13.886,((Cari:17.7175,(Mtru:13.6768,Psat:13.6768):4.04064):14.4493,Ljap:32.1668):4.2303):5.29718):2.1924):17.1536):4.09019):32.3022):11.1186,Vvin:108.551):5.89394):16.7998):28.755)' \
+    -d '((Macu<0>,(Osat<2>,Zmay<4>)<3>)<1>,(Nnuc<6>,(Slyc<8>,(((Mdom<10>,(Csat<12>,Atha<14>)<13>)<11>,(Ccan<16>,((Mpud<18>,(Stor<20>,Cfas<22>)<21>)<19>,((Sfla<24>,(Lalb<26>,Lang<28>)<27>)<25>,((Dodo<30>,Ahyp<32>)<31>,((Ccaj<34>,(Gmax<36>,(Vrad<38>,Pvul<40>)<39>)<37>)<35>,((Cari<42>,(Mtru<44>,Psat<46>)<45>)<43>,Ljap<48>)<47>)<41>)<33>)<29>)<23>)<17>)<15>,Vvin<50>)<49>)<9>)<7>)<5>' \
+    -o cafe_reports/summary_run1_tree_rapid.png \
+    -y Rapid
+
+#### Step 2, use estimated lambda from small families to analyse gene families with 
+#### large numbers of gene copies, this step is CPU intensive and take a while.
+
+/usr/bin/time --verbose ${binDIR}/cafe tutorial_run2.cafe > tutorial_run2.log
+
+# summarise the cafe output
+${binDIR}/../cafe_tutorial/python_scripts/cafetutorial_report_analysis.py \
+    -i cafe_reports/report_run2.cafe \
+    -o cafe_reports/summary_run2 \
+    > tutorial_run2.summary.log
+
+#### Step 3, use estimated lambda from small families to analyse all gene families
+
+/usr/bin/time --verbose ${binDIR}/cafe tutorial_run3.cafe > tutorial_run3.log
+
+# summarise the cafe output
+${binDIR}/../cafe_tutorial/python_scripts/cafetutorial_report_analysis.py \
+    -i cafe_reports/report_run3.cafe \
+    -o cafe_reports/summary_run3 \
+    > tutorial_run3.summary.log
+
+```
+
+The output from this estimation is "Lambda : 0.00719424460424 & Score: 626399.359123". However, With the original "cafe_small.tsv" file, there was warnings for ortho43 "WARNING: Calculated posterior probability for family ortho43 = 0". Therefore, "ortho43" was manully removed from "cafe_small.tsv" file and new file was renamed as "cafe_small.tsv_modified", and re-run above cafe commands.
+

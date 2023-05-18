@@ -1,0 +1,96 @@
+---
+title: "1 Data preprocessing for proteins used for gene expansion analysis"
+author: "Zhipeng Qu"
+date: "17/01/2022"
+output:
+    html_document:
+        toc: true
+        toc_depth: 3
+        code_folding: hide
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(
+    message = FALSE, 
+    comment = '', 
+    fig.width = 6, 
+    fig.height = 6
+)
+```
+
+## Get longest isoforms of genes from selected species
+
+1. for 9 species with their protein sequences downloaded from NCBI (or with NCBI similair sequence ids), the proteins from the primary transcript will be extracted based on the header of the fasta file (assum the sequence id ends with ".1" as primary transcript/protein).
+
+```{r, get longest isoform if follows NCBI id format}
+setwd("../data/proteins/")
+library(Biostrings)
+library(knitr)
+species = c("Ahyp", "Atha", "Cari", "Ccaj", "Gmax", "Ljap", "Psat", "Stor", "Vrad")
+
+seq_sum = NULL
+for(i in species){
+    filename = paste0("./ncbi/", i, ".faa")
+    prot_fa = readAAStringSet(filename)
+    prot_iso = gsub(" .+", "", names(prot_fa))
+    prot_iso = gsub(".+\\.", "", prot_iso)
+    prot_pri = prot_fa[prot_iso == "1", ]
+    seq_sum = rbind(seq_sum, c(i, length(prot_fa), length(prot_pri)))
+    outname = paste0(i, ".faa")
+    writeXStringSet(prot_pri, file = outname)
+}
+colnames(seq_sum) = c("species", "all", "primary")
+write.table(seq_sum, file = "./ncbi/isoforms_summary.tsv", quote = F, sep = "\t", col.names = F, row.names = T)
+kable(seq_sum)
+```
+
+2. for all species, use cd-hit-est
+
+Use cd-hit-est to remove peptides/proteins which are fully-contained in other proteins (identity >= 99%). The commands were saved in bash script "run_cd_hit_est.sh" in "scripts" folder.
+
+```
+#!/bin/bash
+wkDIR="/home/Genomics/KS_WGS_20200626/phylogenomics_analysis_20220203"
+inDIR="${wkDIR}/data/proteins"
+outDIR="${wkDIR}/data/primary_proteins"
+binDIR="${HOME}/Apps/cd-hit-v4.8.1-2019-0228"
+
+cd $inDIR
+files=$( ls *.faa )
+
+cd $outDIR
+for f in ${files[@]}
+do
+    ${binDIR}/cd-hit-est -i ${inDIR}/${f} -o ${f} -c 0.99
+
+done
+
+# merge proteins from all species into one file
+cat *.faa > all_species.primary_proteins.fa
+```
+
+We summarised the number of primary proteins after cd-hit-est.
+
+```{r, summarise primary proteins}
+setwd("../data/primary_proteins")
+library(knitr)
+
+speci_files = list.files(path = "./", pattern = ".faa$")
+speci_sum_df = NULL
+for( speci in speci_files){
+    speci_id = gsub(".faa", "", speci)
+    before_cd = system(paste0('grep -c ">" ../proteins/', speci), intern = T)
+    after_cd = system(paste0('grep -c ">" ./', speci), intern = T)
+    
+    speci_sum_df = rbind(speci_sum_df, c(speci_id, before_cd, after_cd))
+}
+
+colnames(speci_sum_df) = c("species", "before_cd_hit", "after_cd_hit")
+
+write.table(speci_sum_df, file = "primary_proteins.cd_hit_est.summary.tsv", 
+    quote = F, sep = "\t", col.names = T, row.names = F)
+
+kable(speci_sum_df, caption = "Summary of primary proteins", 
+    format.args = list(big.mark = ",", scientific = FALSE))
+```
+

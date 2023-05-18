@@ -1,0 +1,183 @@
+---
+title: "2 Gene expansion analysis according to orthoFinder method"
+author: "Zhipeng Qu"
+date: "03/02/2022"
+output:
+    html_document:
+        toc: true
+        toc_depth: 3
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(
+    message = FALSE, 
+    comment = '', 
+    fig.width = 6, 
+    fig.height = 6
+)
+```
+
+Summary: this gene expansion analysis is based on the orthoFinder method. Orthogroups (gene familiies) and species trees were identified using orthoFinder, and then were used for CAFE to do gene expansion analysis.
+
+## 1 OrthoFinder 
+
+Use primary proteins (proteins from primary transcripts) of 26 species as input. This orthoFinder was carried out in Phoenix. The s
+
+```
+#!/bin/bash
+#merge fasta and gff files after split_rnd3 maker
+
+echo -ne "The program starts at: "
+date
+
+wkDIR="/hpcfs/KS_WGS_20200626/nanopore"
+outDIR="${wkDIR}/results/e1_canu_ec/maker/juicer_purge_10/phylogenomics_analysis/orthofinder_all"
+binDIR="${HOME}/apps/OrthoFinder"
+
+export TMPDIR=${outDIR}
+
+## create output dir if none
+cd $outDIR
+if [ -d ${outDIR} ]; then
+    echo "Output folder exists ... "
+else
+    mkdir -p ${outDIR}
+fi
+
+# run OrthoFinder
+cd ${outDIR}
+
+/usr/bin/time --verbose ${binDIR}/orthofinder \
+    -f ${outDIR} \
+    -t 32 -a 32 \
+    -M msa -A muscle \
+    -n muscle_FastTree
+
+echo -ne "The program ends at: "
+date
+```
+
+The slurm script for this job is:
+
+```
+#!/bin/bash
+#SBATCH -p batch 
+#SBATCH -N 1
+#SBATCH -n 32 
+#SBATCH --time=72:00:00
+#SBATCH --mem=188GB
+#SBATCH --ntasks-per-core=2
+
+#SBATCH --mail-type=END
+#SBATCH --mail-user=zhipeng.qu@adelaide.edu.au
+#SBATCH -o t1_o1_1_job_orthofinder_all_msa.slurm-%j.out
+
+module load arch/haswell
+module load MUSCLE
+
+wkDIR="/hpcfs/KS_WGS_20200626/nanopore"
+
+cd ../scripts
+./t1_o1_1_run_orthofinder_all_msa.sh >t1_o1_1_run_orthofinder_all_msa.20220203.log 2>&1
+
+sacct -j $SLURM_JOBID --format="JobID,JobName,Partition,ReqNodes,ReqCPUS,ReqMem,Timelimit,ExitCode,Cluster,Account,AllocCPUS,AllocNodes,CPUTime,MaxRSS,Elapsed,MaxDiskRead,MaxDiskWrite,Submit,Start"
+```
+
+## 2 Pre-process orthogroups and make ultrametric tree for CAFE
+
+Orthogroups identified by orthoFinder need to be formatted and filtered for CAFE to estimate lambda. A python script (orthofinder2cafe.py) is written to reformat and filter the orthogroups count table for CAFE. 
+
+When generating the ultrametric tree, 160 MYA was used as the root age (MRCA, most recent common ancester, accroding to Bell C. et al, 2010, Am J Bot., "The age and diversification of the angiosperms re-revisited").
+
+```
+wkDIR="/home/Genomics/Lab_projects/KS_WGS_29112019/results/nanopore/phylogenomics_analysis_20220203"
+dataDIR="${wkDIR}/data/primary_proteins"
+outDIR="${wkDIR}/results/2_gene_expansion_orthoFinder_method"
+
+if [ -f ${outDIR} ]; then
+    echo "${outDIR} exists!"
+else
+    mkdir -p ${outDIR}
+fi
+
+cd ${outDIR}
+
+# format and filter orthogroups from orthoFinder 
+python ../../scripts/orthofinder2cafe.py Orthogroups.GeneCount.tsv Orthogroups.cafe_raw.tsv Orthogroups.cafe_large.tsv Orthogroups.cafe_small.tsv
+
+# convert orthoFinder species tree to ultrametric tree
+python ~/Apps/OrthoFinder/tools/make_ultrametric.py -r 160 SpeciesTree_rooted.txt
+```
+
+Orthogroups count table (Orthogroups.cafe_small.tsv) and ultrametric tree (SpeciesTree_rooted.txt.ultrametric.tre) will be used for CAFE analysis.
+
+## 3 Gene expansion analysis using CAFE
+[07/02/2022]
+
+[Important] Please note, CAFE5 (v5.0, 2021 May) has issue to estimate lamda for my dataset. CAFE5 (v5.0b2, 2020 Jan) works fine, but python scripts are not compatible with this. Therefore, CAFE4 (v4.2.1) was used in this analysis. The analysis was based on the 2016 tutorial. 
+
+1. Estimating the birth-death parameter lamda
+
+The main goal of CAFE is to estimate one or more birth-death (lamda) parameters for the provied tree and gene family counts. The lamda parameter describes the probability that any gene will be gained or lost.
+
+In this initial analysis, we assume all species have the same lambda values. A pseudo tree was manually created based on the ultrametric tree as the input of lambda command (replace all nodes with 1). These cafe commands were saved in a cafe_run1.sh
+
+```
+wkDIR="/home/Genomics/Lab_projects/KS_WGS_29112019/results/nanopore/phylogenomics_analysis_20220203"
+outDIR="${wkDIR}/results/2_gene_expansion_orthoFinder_method"
+scriptDIR="${wkDIR}/scripts"
+binDIR="$HOME/Apps/CAFE/release"
+
+if [ -f ${outDIR} ]; then
+    echo -ne "${outDIR} exists!"
+else
+    mkdir -p ${outDIR}
+fi
+
+cd ${outDIR}
+mkdir cafe_reports
+
+####Step 1, use small gene families to estimate lambda
+
+# run lambda estimation
+/usr/bin/time --verbose ${binDIR}/cafe orthofinder_run1.cafe > orthofinder_run1.log
+
+# summarise the cafe output
+${binDIR}/../cafe_tutorial/python_scripts/cafetutorial_report_analysis.py \
+    -i cafe_reports/report_run1.cafe \
+    -o cafe_reports/summary_run1 \
+    > orthofinder_run1.summary.log
+
+# plot tree with gene expansion/contraction info added (requires biopython), in this
+# script, '-t' is the ultrametric tree from orthoFinder, '-d' is the node tree generated
+# from the log file of last step, '-o' tree with rapid gene expansion/contraction gene
+# families numbers added, '-y' only add rapid gene families.
+python ${binDIR}/../cafe_tutorial/python_scripts/cafetutorial_draw_tree.py \
+    -i cafe_reports/summary_run1_node.txt \
+    -t '((Macu:126.846,(Osat:41.0142,Zmay:41.0142):85.8318):33.154,(Nnuc:131.245,(Slyc:114.445,(((Mdom:91.5196,(Csat:84.2473,Atha:84.2473):7.27227):5.91307,(Ccan:65.1305,((Mpud:43.7174,(Stor:34.136,Cfas:34.136):9.58146):17.3229,((Sfla:33.1392,(Lalb:10.1245,Lang:10.1245):23.0147):10.7475,((Dodo:29.7728,Ahyp:29.7728):11.9215,((Ccaj:22.5111,(Gmax:20.1352,(Vrad:9.80071,Pvul:9.80071):10.3345):2.37588):13.886,((Cari:17.7175,(Mtru:13.6768,Psat:13.6768):4.04064):14.4493,Ljap:32.1668):4.2303):5.29718):2.1924):17.1536):4.09019):32.3022):11.1186,Vvin:108.551):5.89394):16.7998):28.755)' \
+    -d '((Macu<0>,(Osat<2>,Zmay<4>)<3>)<1>,(Nnuc<6>,(Slyc<8>,(((Mdom<10>,(Csat<12>,Atha<14>)<13>)<11>,(Ccan<16>,((Mpud<18>,(Stor<20>,Cfas<22>)<21>)<19>,((Sfla<24>,(Lalb<26>,Lang<28>)<27>)<25>,((Dodo<30>,Ahyp<32>)<31>,((Ccaj<34>,(Gmax<36>,(Vrad<38>,Pvul<40>)<39>)<37>)<35>,((Cari<42>,(Mtru<44>,Psat<46>)<45>)<43>,Ljap<48>)<47>)<41>)<33>)<29>)<23>)<17>)<15>,Vvin<50>)<49>)<9>)<7>)<5>' \
+    -o cafe_reports/summary_run1_tree_rapid.png \
+    -y Rapid
+
+#### Step 2, use estimated lambda from small families to analyse gene families with 
+#### large numbers of gene copies, this step is CPU intensive and take a while.
+
+/usr/bin/time --verbose ${binDIR}/cafe orthofinder_run2.cafe > orthofinder_run2.log
+
+# summarise the cafe output
+${binDIR}/../cafe_tutorial/python_scripts/cafetutorial_report_analysis.py \
+    -i cafe_reports/report_run2.cafe \
+    -o cafe_reports/summary_run2 \
+    > orthofinder_run2.summary.log
+
+#### Step 3, use estimated lambda from small families to analyse all gene families
+
+/usr/bin/time --verbose ${binDIR}/cafe orthofinder_run3.cafe > orthofinder_run3.log
+
+# summarise the cafe output
+${binDIR}/../cafe_tutorial/python_scripts/cafetutorial_report_analysis.py \
+    -i cafe_reports/report_run3.cafe \
+    -o cafe_reports/summary_run3 \
+    > orthofinder_run3.summary.log
+
+```
